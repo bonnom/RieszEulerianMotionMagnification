@@ -1,5 +1,7 @@
 # Motion Magnification Using Riesz Pyramid
-
+```diff
+@@ Doesn't work properly @@
+```
 This Python script performs Eulerian video magnification of motion on video frames, adapting concepts from the Riesz Pyramid method. It is based on the work described in the article by Neal Wadhwa,Michael Rubinstein, William Freeman, Fredo Durand, "Riesz Pyramids for Fast Phase-Based Video Magnification". It must be noted however that this uses an traditional laplacian pyramid and not their Laplacian-like pyramid.
 This makes the reconstruction of the original image not as good.
 
