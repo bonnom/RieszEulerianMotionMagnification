@@ -1,6 +1,114 @@
 import cv2
 import numpy as np
 from scipy.signal import butter
+import time
+import scipy.signal
+
+# Define the filter kernels
+lowpass = np.array([
+    [-0.0001, -0.0007, -0.0023, -0.0046, -0.0057, -0.0046, -0.0023, -0.0007, -0.0001],
+    [-0.0007, -0.0030, -0.0047, -0.0025, -0.0003, -0.0025, -0.0047, -0.0030, -0.0007],
+    [-0.0023, -0.0047, 0.0054, 0.0272, 0.0387, 0.0272, 0.0054, -0.0047, -0.0023],
+    [-0.0046, -0.0025, 0.0272, 0.0706, 0.0910, 0.0706, 0.0272, -0.0025, -0.0046],
+    [-0.0057, -0.0003, 0.0387, 0.0910, 0.1138, 0.0910, 0.0387, -0.0003, -0.0057],
+    [-0.0046, -0.0025, 0.0272, 0.0706, 0.0910, 0.0706, 0.0272, -0.0025, -0.0046],
+    [-0.0023, -0.0047, 0.0054, 0.0272, 0.0387, 0.0272, 0.0054, -0.0047, -0.0023],
+    [-0.0007, -0.0030, -0.0047, -0.0025, -0.0003, -0.0025, -0.0047, -0.0030, -0.0007],
+    [-0.0001, -0.0007, -0.0023, -0.0046, -0.0057, -0.0046, -0.0023, -0.0007, -0.0001]
+])
+
+highpass = np.array([
+    [0.0000, 0.0003, 0.0011, 0.0022, 0.0027, 0.0022, 0.0011, 0.0003, 0.0000],
+    [0.0003, 0.0020, 0.0059, 0.0103, 0.0123, 0.0103, 0.0059, 0.0020, 0.0003],
+    [0.0011, 0.0059, 0.0151, 0.0249, 0.0292, 0.0249, 0.0151, 0.0059, 0.0011],
+    [0.0022, 0.0103, 0.0249, 0.0402, 0.0469, 0.0402, 0.0249, 0.0103, 0.0022],
+    [0.0027, 0.0123, 0.0292, 0.0469, -0.9455, 0.0469, 0.0292, 0.0123, 0.0027],
+    [0.0022, 0.0103, 0.0249, 0.0402, 0.0469, 0.0402, 0.0249, 0.0103, 0.0022],
+    [0.0011, 0.0059, 0.0151, 0.0249, 0.0292, 0.0249, 0.0151, 0.0059, 0.0011],
+    [0.0003, 0.0020, 0.0059, 0.0103, 0.0123, 0.0103, 0.0059, 0.0020, 0.0003],
+    [0.0000, 0.0003, 0.0011, 0.0022, 0.0027, 0.0022, 0.0011, 0.0003, 0.0000]
+])
+
+# Riesz band filter
+riesz_band_filter = np.array([
+    [-0.12, 0, 0.12],
+    [-0.34, 0, 0.34],
+    [-0.12, 0, 0.12]
+])
+
+class RieszPyramid:
+    def __init__(self, image, max_levels=3):
+        """Initialize the Riesz pyramid with the given image and number of levels."""
+        self.max_levels = max_levels
+        self.image = image.astype(np.float32)
+        self.pyramid = self.build_riesz_pyramid(self.image, max_levels)
+
+    def __getitem__(self, index):
+        """Return the pyramid level at the specified index."""
+        return self.pyramid[index]
+
+    def getsize(self, img):
+        """Get the size of the image."""
+        h, w = img.shape[:2]
+        return w, h
+
+    def build_laplacian_pyramid(self,img, minsize=2, dtype=np.float32):
+        img = dtype(img)
+        laplacian_pyramid = []
+        while (min(img.shape) > minsize):
+            # convolutionFunction = scipy.signal.convolve2d
+            # hp_img = convolutionFunction(img, highpass, mode='same',boundary='fill')
+            # lp_img = convolutionFunction(img, lowpass, mode='same',boundary='fill')
+            hp_img = scipy.signal.convolve2d(np.pad(img, (highpass.shape[0]-1)//2, mode='reflect'), highpass, mode='valid')
+            lp_img = scipy.signal.convolve2d(np.pad(img, (lowpass.shape[0]-1)//2, mode='reflect'), lowpass, mode='valid')
+
+            laplacian_pyramid.append(hp_img)
+            img = lp_img[0::2,0::2]
+
+        laplacian_pyramid.append(img)
+        return laplacian_pyramid
+
+    def apply_riesz_filters(self, octave):
+        """Apply Riesz filters to the image octave."""
+        riesz_x = scipy.signal.convolve2d(octave, riesz_band_filter, mode='same', boundary='symm')
+        riesz_y = scipy.signal.convolve2d(octave, riesz_band_filter.T, mode='same', boundary='symm')
+        return riesz_x, riesz_y
+
+    def build_riesz_pyramid(self, image, max_levels):
+        """Construct the Riesz pyramid."""
+        self.laplacian_pyramid = self.build_laplacian_pyramid(image)
+        riesz_pyramid = [self.apply_riesz_filters(level) for level in self.laplacian_pyramid]
+        return riesz_pyramid
+
+    def riesz_to_spherical(self):
+        """Convert Riesz pyramid to spherical coordinates."""
+        newpyr = {'A': [], 'theta': [], 'phi': [], 'Q': [], 'base': self.pyramid[-1]}
+        for ii in range(len(self.pyramid) - 1):
+            I = self.pyramid[ii][0]
+            R1 = self.pyramid[ii][1]
+            R2 = self.pyramid[ii][2]
+            A = np.sqrt(I**2 + R1**2 + R2**2)
+            theta = np.arctan2(R2, R1)
+            Q = R1 * np.cos(theta) + R2 * np.sin(theta)
+            phi = np.arctan2(Q, I)
+
+            newpyr['A'].append(A)
+            newpyr['theta'].append(theta)
+            newpyr['phi'].append(phi)
+            newpyr['Q'].append(Q)
+        return newpyr
+
+    def riesz_spherical_to_laplacian(self, pyr):
+        """Convert spherical coordinates back to Laplacian."""
+        newpyr = []
+        for ii in range(len(pyr['A'])):
+            newpyr.append(pyr['A'][ii] * np.cos(pyr['phi'][ii]))
+        newpyr.append(pyr['base'])
+        return newpyr
+
+    def get_levels(self):
+        """Return the pyramid."""
+        return self.pyramid
 
 class IIRTemporalFilter:
     def __init__(self, B, A):
@@ -20,59 +128,7 @@ class IIRTemporalFilter:
         self.register0 = self.B[1] * phase + self.register1 - self.A[1] * temporally_filtered_phase
         self.register1 = self.B[2] * phase - self.A[2] * temporally_filtered_phase
         return temporally_filtered_phase
-
-class RieszPyramid:
-    def __init__(self, image, max_levels=3):
-        """Initialize the Riesz pyramid with the given image and number of levels."""
-        self.max_levels = max_levels
-        self.image = image.astype(np.float32)
-        self.expanded_pyramid = []
-        self.laplacian_pyramid = []
-        self.pyramid = self.build_riesz_pyramid(self.image, max_levels)
-
-    def __getitem__(self, index):
-        """Return the pyramid level at the specified index."""
-        return self.pyramid[index]
-
-    def build_gaussian_pyramid(self, image, max_levels):
-        """Construct a Gaussian pyramid."""
-        pyramid = [image]
-        for _ in range(max_levels):
-            image = cv2.pyrDown(image)
-            pyramid.append(image)
-        return pyramid
-
-    def build_laplacian_pyramid(self, gaussian_pyramid):
-        """Construct a Laplacian pyramid from the Gaussian pyramid."""
-        pyramid = []
-        self.expanded_pyramid = []
-        for i in range(len(gaussian_pyramid) - 1, 0, -1):
-            expanded = cv2.pyrUp(gaussian_pyramid[i])
-            laplacian = cv2.subtract(gaussian_pyramid[i - 1], expanded)
-            pyramid.append(laplacian)
-            self.expanded_pyramid.append(expanded)
-        pyramid.append(gaussian_pyramid[-1])
-        return pyramid
-
-    def apply_riesz_filters(self, octave):
-        """Apply Riesz filters to the image octave."""
-        kernel_x = np.array([[-0.49, 0, 0.49]], dtype=np.float32)
-        kernel_y = kernel_x.T
-        riesz_x = cv2.filter2D(octave, -1, kernel_x)
-        riesz_y = cv2.filter2D(octave, -1, kernel_y)
-        return riesz_x, riesz_y
-
-    def build_riesz_pyramid(self, image, max_levels):
-        """Construct the Riesz pyramid by combining Gaussian and Laplacian pyramids with Riesz filters."""
-        gaussian_pyramid = self.build_gaussian_pyramid(image, max_levels)
-        self.laplacian_pyramid = self.build_laplacian_pyramid(gaussian_pyramid)
-        riesz_pyramid = [self.apply_riesz_filters(level) for level in self.laplacian_pyramid]
-        return riesz_pyramid
-
-    def get_levels(self):
-        """Return the Gaussian and Laplacian pyramids."""
-        return self.pyramid, self.laplacian_pyramid
-
+    
 def compute_phase_difference_and_amplitude(current_real, current_x, current_y, previous_real, previous_x, previous_y):
     """Compute phase difference and amplitude between current and previous Riesz pyramid levels."""
     eps = np.finfo(float).eps  # Small constant to prevent division by zero
@@ -129,19 +185,23 @@ def phase_shift_coefficient_real_part(riesz_real, riesz_x, riesz_y, phase_cos, p
     
     return result
 
-def reconstruct_from_pyramid_expanded(pyramid, expanded_pyramid, levels):
-    """Reconstruct the image from the pyramid, including expanded pyramid levels."""
-    reconstructed_frame = pyramid[0]
-    for i in range(1, levels):
-        reconstructed_frame = cv2.pyrUp(reconstructed_frame) + pyramid[i] + 0.5 * expanded_pyramid[i]
-    return reconstructed_frame
+def reconstruct_from_pyramid(pyramid):
+    img = pyramid[-1]
+    for ii in range(len(pyramid)-2,-1,-1):
+        lev_img = pyramid[ii]
 
-def reconstruct_from_pyramid(pyramid, levels):
-    """Reconstruct the image from the pyramid itself."""
-    reconstructed_frame = pyramid[0]
-    for i in range(1, levels):
-        reconstructed_frame = cv2.pyrUp(reconstructed_frame) + pyramid[i]
-    return reconstructed_frame
+        upimg = np.zeros((img.shape[0]*2,img.shape[1]*2))
+        upimg[0::2,0::2]=img.copy()*4
+
+        img = upimg[0:lev_img.shape[0],0:lev_img.shape[1]]
+
+        # convolutionFunction = scipy.signal.convolve2d
+        # img = convolutionFunction(img, lowpass, mode='same',boundary='fill')
+        # img += convolutionFunction(lev_img, highpass, mode='same',boundary='fill')
+
+        img = scipy.signal.convolve2d(np.pad(img, (lowpass.shape[0]-1)//2, mode='reflect'), lowpass, mode='valid')
+        img += scipy.signal.convolve2d(np.pad(lev_img, (highpass.shape[0]-1)//2, mode='reflect'), highpass, mode='valid')
+    return img
 
 def normalize_to_uint8(motion_magnified_frame):
     """Normalize the image to the uint8 range [0, 255]."""
@@ -157,7 +217,8 @@ def normalize_to_uint8(motion_magnified_frame):
 
 def magnify_motion(video_name, video_output_name, 
                    low_cutoff, high_cutoff, amplification, levels, 
-                   color='gray', blur='amplitude', reconstruct_expanded=True):
+                   color='gray', blur='amplitude', reconstruct_expanded=True,
+                   save=True):
     """
     Magnify motion in a video and save the result.
 
@@ -188,7 +249,8 @@ def magnify_motion(video_name, video_output_name,
         video_output_color = False
     else:
         video_output_color = True
-    out = cv2.VideoWriter(video_output_name, fourcc, fps, (int(cap.get(3)), int(cap.get(4))), video_output_color)
+    if save == True:
+        out = cv2.VideoWriter(video_output_name, fourcc, fps, (int(cap.get(3)), int(cap.get(4))), video_output_color)
 
     # Read the first frame
     ret, frame = cap.read()
@@ -198,9 +260,9 @@ def magnify_motion(video_name, video_output_name,
     
     # Convert frame to grayscale if specified
     if color == 'gray':
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)/255
     else:
-        frame = frame.astype(np.float32)
+        frame = frame.astype(np.float32) /255
     
     # Create Riesz pyramid and Laplacian pyramid for the initial frame
     previous_riesz_pyramid = RieszPyramid(frame, levels)
@@ -275,24 +337,23 @@ def magnify_motion(video_name, video_output_name,
         motion_magnified_laplacian_pyramid[levels - 1] = current_laplacian_pyramid[levels - 1]
 
         # Reconstruct the motion magnified frame
-        if reconstruct_expanded:
-            motion_magnified_frame = reconstruct_from_pyramid_expanded(
-                motion_magnified_laplacian_pyramid, riesz_pyramid.expanded_pyramid, levels
-            )
-        else:
-            motion_magnified_frame = reconstruct_from_pyramid(
-                motion_magnified_laplacian_pyramid, levels
-            )
+
+        motion_magnified_frame = reconstruct_from_pyramid(
+            motion_magnified_laplacian_pyramid)
 
         # Normalize the frame to 8-bit unsigned integer format
         motion_magnified_frame = normalize_to_uint8(motion_magnified_frame)
         
         previous_riesz_pyramid = riesz_pyramid
-        
+        #print('amplitude range ', np.min(amplitude),'-',np.max(amplitude))
         # Write the frame to the output video
-        out.write(motion_magnified_frame)
+        if save==True:
+            out.write(motion_magnified_frame)
         # Display the frame
         cv2.imshow('Motion Magnified', motion_magnified_frame)
+
+        #debug
+        #cv2.imshow('Motion Magnified', phase_cos[1])
 
         # Exit if 'q' key is pressed
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -300,12 +361,14 @@ def magnify_motion(video_name, video_output_name,
 
     # Release resources
     cap.release()
-    out.release()
+    if save == True:
+        out.release()
     cv2.destroyAllWindows()
     
 # Example usage
 if __name__ == "__main__":
-    magnify_motion("baby.mp4", "baby_amplified_levels6.mp4", 
-                   low_cutoff=0.1, high_cutoff=2, amplification=12, levels=3,
-                   color='gray', blur='amplitude', reconstruct_expanded=True)
-
+    start_time=time.perf_counter()
+    magnify_motion("baby.mp4", "baby_amplified_large_riesz_float32.mp4", 
+                   low_cutoff=0.1, high_cutoff=0.4, amplification=10, levels=10,
+                   color='gray', blur='amplitude', reconstruct_expanded=False,save=True)
+    print('Time to make Riesz Pyramid is',time.perf_counter()-start_time)
